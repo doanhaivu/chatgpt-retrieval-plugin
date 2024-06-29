@@ -1,7 +1,5 @@
 from typing import List
-from openai import OpenAI
-
-client = OpenAI()
+import openai
 import os
 from loguru import logger
 
@@ -31,12 +29,12 @@ def get_embeddings(texts: List[str]) -> List[List[float]]:
 
     response = {}
     if deployment is None:
-        response = client.embeddings.create(input=texts, model=EMBEDDING_MODEL, dimensions=EMBEDDING_DIMENSION)
+        response = openai.Embedding.create(input=texts, model=EMBEDDING_MODEL, dimensions=EMBEDDING_DIMENSION)
     else:
-        response = client.embeddings.create(input=texts, deployment_id=deployment)
+        response = openai.Embedding.create(input=texts, deployment_id=deployment)
 
     # Extract the embedding data from the response
-    data = response.data  # type: ignore
+    data = response["data"]  # type: ignore
 
     # Return the embeddings as a list of lists of floats
     return [result["embedding"] for result in data]
@@ -65,13 +63,17 @@ def get_chat_completion(
     # Note: Azure Open AI requires deployment id
     response = {}
     if deployment_id == None:
-        response = client.chat.completions.create(model=model,
-        messages=messages)
+        response = openai.ChatCompletion.create(
+            model=model,
+            messages=messages,
+        )
     else:
-        response = client.chat.completions.create(deployment_id=deployment_id,
-        messages=messages)
+        response = openai.ChatCompletion.create(
+            deployment_id=deployment_id,
+            messages=messages,
+        )
 
-    choices = response.choices  # type: ignore
+    choices = response["choices"]  # type: ignore
     completion = choices[0].message.content.strip()
     logger.info(f"Completion: {completion}")
     return completion
