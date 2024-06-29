@@ -10,10 +10,10 @@
   },
   "api": {
     "type": "openapi",
-    "url": "https://chatvector.fly.dev/.well-known/openapi.yaml",
+    "url": "https://chatvector-retrieval-19bff9992eec.herokuapp.com/.well-known/openapi.yaml",
     "has_user_authentication": false
   },
-  "logo_url": "https://chatvector.fly.dev/.well-known/logo.png",
+  "logo_url": "https://chatvector-retrieval-19bff9992eec.herokuapp.com/.well-known/logo.png",
   "contact_email": "vu@doanvuh.com", 
-  "legal_info_url": "https://chatvector.app/legal-info"
+  "legal_info_url": "https://chatvector-retrieval-19bff9992eec.herokuapp.com/legal-info"
 }

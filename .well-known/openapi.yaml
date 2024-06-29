@@ -4,7 +4,7 @@ info:
   description: ChatVector A retrieval API for querying and filtering documents based on natural language queries and metadata
   version: 1.0.0
   servers:
-    - url: https://chatvector.fly.dev
+    - url: https://chatvector-retrieval-19bff9992eec.herokuapp.com
 paths:
   /query:
     post:
