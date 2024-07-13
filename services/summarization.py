@@ -8,11 +8,11 @@ import numpy as np
 import networkx as nx
 from networkx.algorithms import community
 
-from langchain_community.llms import OpenAI
+from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
 from langchain.docstore.document import Document
 from langchain.chains.summarize import load_summarize_chain
-
+from langchain_core.messages.ai import AIMessage
 class TopicData(BaseModel):
     page_content: str
 
@@ -22,8 +22,8 @@ class Stage1Output(BaseModel):
 
 class TranscriptElement(BaseModel):
     text: str
-    start: int
-    duration: int
+    start: float
+    duration: float
 
 class SummarizeInput(BaseModel):
     transcript: List[TranscriptElement]
@@ -92,27 +92,42 @@ def create_chunks(sentences, CHUNK_LENGTH, STRIDE):
   return chunks_df.to_dict('records')
 
 def parse_title_summary_results(results):
-  out = []
-  for e in results:
-    e = e.replace('\n', '')
-    if '|' in e:
-      processed = {'title': e.split('|')[0],
-                    'summary': e.split('|')[1][1:]
-                    }
-    elif ':' in e:
-      processed = {'title': e.split(':')[0],
-                    'summary': e.split(':')[1][1:]
-                    }
-    elif '-' in e:
-      processed = {'title': e.split('-')[0],
-                    'summary': e.split('-')[1][1:]
-                    }
-    else:
-      processed = {'title': '',
-                    'summary': e
-                    }
-    out.append(processed)
-  return out
+    out = []
+    for e in results:
+        # Removing newline characters for easier processing
+        e = e.replace('\n', '')
+        
+        title = ''
+        summary = ''
+        
+        if 'Title:' in e and 'Summary:' in e:
+            title_part = e.split('Summary:')[0]
+            summary_part = e.split('Summary:')[1]
+            
+            if 'Title:' in title_part:
+                title = title_part.split('Title:')[1].strip()
+            
+            summary = summary_part.strip()
+        else:
+            # Original logic for splitting by |, :, or -
+            if '|' in e:
+                title, summary = e.split('|', 1)
+            #elif ':' in e:
+            #    title, summary = e.split(':', 1)
+            #elif '-' in e:
+            #    title, summary = e.split('-', 1)
+            else:
+                summary = e
+
+            title = title.strip()
+            summary = summary.strip()
+
+        processed = {
+            'title': title,
+            'summary': summary
+        }
+        out.append(processed)
+    return out
 
 
 def summarize_stage_1(chunks_text):
@@ -133,13 +148,17 @@ def summarize_stage_1(chunks_text):
   map_prompt = PromptTemplate(template=map_prompt_template, input_variables=["text"])
 
   # Define the LLMs
-  map_llm = OpenAI(temperature=0, model_name = MODEL_NAME)
+  map_llm = ChatOpenAI(temperature=0, model_name = MODEL_NAME, max_tokens=None, timeout=None, max_retries=2)
+
   map_llm_chain = map_prompt | map_llm
   map_llm_chain_input = [{'text': t} for t in chunks_text]
   # Run the input through the LLM chain (works in parallel)
   map_llm_chain_results = map_llm_chain.invoke(map_llm_chain_input)
 
-  stage_1_outputs = parse_title_summary_results([e['text'] for e in map_llm_chain_results])
+  if not isinstance(map_llm_chain_results, list):
+    stage_1_outputs = parse_title_summary_results([map_llm_chain_results.content])
+  else:
+    stage_1_outputs = parse_title_summary_results([e for e in map_llm_chain_results])
 
   print(f'Stage 1 done time {datetime.now()}')
 
@@ -177,7 +196,7 @@ def get_topics(title_similarity, num_topics = 8, bonus_constant = 0.25, min_size
     resolution += resolution_step
   topic_sizes = [len(c) for c in topics_title]
   sizes_sd = np.std(topic_sizes)
-  modularity = community.modularity(title_nx_graph, topics_title, weight = 'weight', resolution = resolution)
+  #modularity = community.modularity(title_nx_graph, topics_title, weight = 'weight', resolution = resolution)
 
   lowest_sd_iteration = 0
   # Set lowest sd to inf
@@ -185,7 +204,7 @@ def get_topics(title_similarity, num_topics = 8, bonus_constant = 0.25, min_size
 
   for i in range(iterations):
     topics_title = community.louvain_communities(title_nx_graph, weight = 'weight', resolution = resolution)
-    modularity = community.modularity(title_nx_graph, topics_title, weight = 'weight', resolution = resolution)
+    #modularity = community.modularity(title_nx_graph, topics_title, weight = 'weight', resolution = resolution)
     
     # Check SD
     topic_sizes = [len(c) for c in topics_title]
@@ -257,6 +276,7 @@ def summarize_stage_2(stage_1_outputs, topics, summary_num_words = 250):
     topics_data.append(topic_data)
     
   # Get a list of each community's summaries (concatenated)
+
   topics_summary_concat = [c['summaries_concat'] for c in topics_data]
   topics_titles_concat = [c['titles_concat'] for c in topics_data]
 
@@ -266,23 +286,22 @@ def summarize_stage_2(stage_1_outputs, topics, summary_num_words = 250):
     topics_titles_concat_all += f'''{i+1}. {c}
     '''
   
-  # print('topics_titles_concat_all', topics_titles_concat_all)
 
-  title_llm = OpenAI(temperature=0, model_name = MODEL_NAME)
+  title_llm = ChatOpenAI(temperature=0, model_name = MODEL_NAME, max_tokens=None, timeout=None, max_retries=2)
   title_llm_chain = title_prompt | title_llm
+  
   title_llm_chain_input = [{'text': topics_titles_concat_all}]
   title_llm_chain_results = title_llm_chain.invoke(title_llm_chain_input)
-  
-  
+
   # Split by new line
-  titles = title_llm_chain_results[0]['text'].split('\n')
+  titles = title_llm_chain_results.content.split('\n')
   # Remove any empty titles
   titles = [t for t in titles if t != '']
   # Remove spaces at start or end of each title
   titles = [t.strip() for t in titles]
 
-  map_llm = OpenAI(temperature=0, model_name = MODEL_NAME)
-  reduce_llm = OpenAI(temperature=0, model_name = MODEL_NAME, max_tokens = -1)
+  map_llm = ChatOpenAI(temperature=0, model_name = MODEL_NAME, max_tokens=None, timeout=None, max_retries=2)
+  reduce_llm = ChatOpenAI(temperature=0, model_name = MODEL_NAME, max_tokens=None, timeout=None, max_retries=2)
 
   # Run the map-reduce chain
   docs = [Document(page_content=t) for t in topics_summary_concat]
