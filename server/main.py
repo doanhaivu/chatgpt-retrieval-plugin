@@ -35,6 +35,8 @@ def validate_token(credentials: HTTPAuthorizationCredentials = Depends(bearer_sc
         raise HTTPException(status_code=401, detail="Invalid or missing token")
     return credentials
 
+# Use spaCy to segment the full text into sentences
+nlp = spacy.load('en_core_web_sm')
 
 app = FastAPI(dependencies=[Depends(validate_token)])
 app.mount("/.well-known", StaticFiles(directory=".well-known"), name="static")
@@ -153,26 +155,23 @@ async def delete(
 
 @app.post("/summarize/", response_model=SummarizeOutput)
 async def summarize(input_data: SummarizeInput):
-    # Load the English NLP model
-    nlp = spacy.load('en_core_web_sm')
+    
+    full_text = ' '.join(segment.text for segment in input_data.transcript)
 
-    transcripts = load_and_process_data()
-
-    #full_text = ' '.join(segment.text for segment in input_data.transcript)
-    full_text = ' '.join(segment.text for segment in transcripts)
-
-    # Use spaCy to segment the full text into sentences
     doc = nlp(full_text)
     inputsentences = [sent.text for sent in doc.sents]
 
     segments = [sentence.split(',') for sentence in inputsentences]
     segments = [item.strip() for sublist in segments for item in sublist]
 
-    #sentences = create_sentences(segments, MIN_WORDS=20, MAX_WORDS=80)
-    sentences = create_sentences(segments, MIN_WORDS=10, MAX_WORDS=20)
+    sentences = create_sentences(segments, MIN_WORDS=20, MAX_WORDS=80)
     chunks = create_chunks(sentences, CHUNK_LENGTH=5, STRIDE=1)
     chunks_text = [chunk['text'] for chunk in chunks]
 
+    print('================sentences===========================')
+    print(sentences)
+    print('==================chunks=========================')
+    print(chunks)
     # Run Stage 1 Summarizing
     stage_1_outputs = summarize_stage_1(chunks_text)['stage_1_outputs']
     # Split the titles and summaries
@@ -203,6 +202,7 @@ async def summarize(input_data: SummarizeInput):
     # Set num_topics to be 1/4 of the number of chunks, or 8, which ever is smaller
     num_topics = min(int(num_1_chunks / 4), 8)
     topics_out = get_topics(summary_similarity_matrix, num_topics = num_topics, bonus_constant = 0.2)
+
     chunk_topics = topics_out['chunk_topics']
     topics = topics_out['topics']
 

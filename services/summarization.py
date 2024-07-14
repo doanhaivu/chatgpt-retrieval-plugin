@@ -135,15 +135,14 @@ def summarize_stage_1(chunks_text):
   print(f'Start time: {datetime.now()}')
 
   # Prompt to get title and summary for each chunk
-  map_prompt_template = """Firstly, give the following text an informative title. Then, on a new line, write a 75-100 word summary of the following text:
-  {text}
+  map_prompt_template = """Firstly, give the below text an informative title. Then, on a new line, write a 75-100 word summary of the following text:
 
   Return your answer in the following format:
-  Title | Summary...
-  e.g. 
-  Why Artificial Intelligence is Good | AI can make humans more productive by automating many repetitive processes.
+  Title:
+  Summary:
 
-  TITLE AND CONCISE SUMMARY:"""
+  {text}
+  """
 
   map_prompt = PromptTemplate(template=map_prompt_template, input_variables=["text"])
 
@@ -155,6 +154,8 @@ def summarize_stage_1(chunks_text):
   # Run the input through the LLM chain (works in parallel)
   map_llm_chain_results = map_llm_chain.invoke(map_llm_chain_input)
 
+  print('========map_llm_chain_results=========')
+  print(map_llm_chain_results)
   if not isinstance(map_llm_chain_results, list):
     stage_1_outputs = parse_title_summary_results([map_llm_chain_results.content])
   else:
@@ -238,24 +239,22 @@ def get_topics(title_similarity, num_topics = 8, bonus_constant = 0.25, min_size
 
 def summarize_stage_2(stage_1_outputs, topics, summary_num_words = 250):
   print(f'Stage 2 start time {datetime.now()}')
+  print(stage_1_outputs)
   
   # Prompt that passes in all the titles of a topic, and asks for an overall title of the topic
   title_prompt_template = """Write an informative title that summarizes each of the following groups of titles. Make sure that the titles capture as much information as possible, 
   and are different from each other:
   {text}
   
-  Return your answer in a numbered list, with new line separating each title: 
-  1. Title 1
-  2. Title 2
-  3. Title 3
-
-  TITLES:
+  Return your answer in a list, with new line separating each title: 
+  Title 1
+  Title 2
+  Title 3
   """
 
   map_prompt_template = """Wite a 75-100 word summary of the following text:
     {text}
-
-    CONCISE SUMMARY:"""
+  """
 
   combine_prompt_template = 'Write a ' + str(summary_num_words) + """-word summary of the following, removing irrelevant information. Finish your answer:
   {text}
@@ -276,7 +275,6 @@ def summarize_stage_2(stage_1_outputs, topics, summary_num_words = 250):
     topics_data.append(topic_data)
     
   # Get a list of each community's summaries (concatenated)
-
   topics_summary_concat = [c['summaries_concat'] for c in topics_data]
   topics_titles_concat = [c['titles_concat'] for c in topics_data]
 
