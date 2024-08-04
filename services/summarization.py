@@ -152,7 +152,7 @@ def summarize_stage_1(chunks_text):
   map_llm_chain = map_prompt | map_llm
   map_llm_chain_input = [{'text': t} for t in chunks_text]
   # Run the input through the LLM chain (works in parallel)
-  map_llm_chain_results = map_llm_chain.invoke(map_llm_chain_input)
+  map_llm_chain_results = map_llm_chain.batch(map_llm_chain_input)
 
   print('========map_llm_chain_results=========')
   print(map_llm_chain_results)
@@ -236,7 +236,6 @@ def get_topics(title_similarity, num_topics = 8, bonus_constant = 0.25, min_size
     }
 
 
-
 def summarize_stage_2(stage_1_outputs, topics, summary_num_words = 250):
   print(f'Stage 2 start time {datetime.now()}')
   print(stage_1_outputs)
@@ -289,7 +288,7 @@ def summarize_stage_2(stage_1_outputs, topics, summary_num_words = 250):
   title_llm_chain = title_prompt | title_llm
   
   title_llm_chain_input = [{'text': topics_titles_concat_all}]
-  title_llm_chain_results = title_llm_chain.invoke(title_llm_chain_input)
+  title_llm_chain_results = title_llm_chain.batch(title_llm_chain_input)
 
   # Split by new line
   titles = title_llm_chain_results.content.split('\n')
@@ -297,6 +296,9 @@ def summarize_stage_2(stage_1_outputs, topics, summary_num_words = 250):
   titles = [t for t in titles if t != '']
   # Remove spaces at start or end of each title
   titles = [t.strip() for t in titles]
+
+  print('========summarize_stage_2 titles=========')
+  print(titles)
 
   map_llm = ChatOpenAI(temperature=0, model_name = MODEL_NAME, max_tokens=None, timeout=None, max_retries=2)
   reduce_llm = ChatOpenAI(temperature=0, model_name = MODEL_NAME, max_tokens=None, timeout=None, max_retries=2)
@@ -308,6 +310,10 @@ def summarize_stage_2(stage_1_outputs, topics, summary_num_words = 250):
 
   output = chain({"input_documents": docs}, return_only_outputs = True)
   summaries = output['intermediate_steps']
+
+  print('========summarize_stage_2 summaries=========')
+  print(summaries)
+
   stage_2_outputs = [{'title': t, 'summary': s} for t, s in zip(titles, summaries)]
   final_summary = output['output_text']
 
