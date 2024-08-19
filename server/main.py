@@ -44,9 +44,21 @@ def validate_token(credentials: HTTPAuthorizationCredentials = Depends(bearer_sc
     return credentials
 
 def generate_chunks(texts, chunk_size=20, overlap=0):
-    cleaned_texts = [remove_bracketed_text(text) for text in texts]
-    for i in range(0, len(cleaned_texts), chunk_size - overlap):
-        yield ' '.join(cleaned_texts[i:i + chunk_size])
+    for i in range(0, len(texts), chunk_size - overlap):
+        yield ' '.join(texts[i:i + chunk_size])
+
+def process_transcript(input_data):
+    # Step 1: Clean the full transcript
+    full_text = ' '.join(segment.text for segment in input_data.transcript)
+    cleaned_text = remove_bracketed_text(full_text)
+    
+    # Step 2: Punctuate the cleaned full text
+    punctuated_text = rpunct.punctuate(cleaned_text)
+    
+    # Step 3: Chunk the punctuated text
+    punctuated_chunks = list(generate_chunks(punctuated_text.split(), chunk_size=20))
+    
+    return punctuated_chunks
 
 # Use spaCy to segment the full text into sentences
 nlp = spacy.load('en_core_web_trf')
@@ -169,32 +181,20 @@ async def delete(
 
 
 @app.post("/summarize/", response_model=SummarizeOutput)
-async def summarize(input_data: SummarizeInput):
-    
-    #full_text = ' '.join(segment.text for segment in input_data.transcript)
+async def summarize(input_data: SummarizeInput):    
     #doc = nlp(full_text)
-    #inputsentences = [sent.text for sent in doc.sents]
-    #transcript_chunks = list(generate_chunks([segment.text for segment in input_data.transcript]))
-    
-    # Step 1: Generate the transcript chunks
-    transcript_chunks = list(generate_chunks([segment.text for segment in input_data.transcript]))
-
-    print('============transcript_chunks==============')
-    for chunk in transcript_chunks:
+    punctuated_chunks = process_transcript(input_data)
+    print('============Punctuated Transcript Chunks==============')
+    for chunk in punctuated_chunks:
         print("-----------")
         print(chunk)
-
-    # Step 2: Punctuate each chunk
-    punctuated_chunks = [rpunct.punctuate(chunk) for chunk in transcript_chunks]
-
-    #docs = list(nlp.pipe(transcript_chunks))
+        
     docs = list(nlp.pipe(punctuated_chunks))
     full_doc = spacy.tokens.Doc.from_docs(docs)
 
     segments = []
     for sentence in full_doc.sents:  # `sents` provides sentences from the `Doc`
         segments.extend([item.strip() for item in sentence.text.split(',')])
-
 
     print('============segments==============')
     for line in segments:
