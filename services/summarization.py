@@ -129,15 +129,23 @@ def parse_title_summary_results(results):
         out.append(processed)
     return out
 
+def print_ai_messages(messages: List[AIMessage]):
+    for i, message in enumerate(messages, start=1):
+        print(f"{i} {message.content.split('Summary:')[0].strip()}")
+        print(f"\n{message.content.split('Summary:')[1].strip()}")
+        print("-" * 50)
+        print()
 
 def summarize_stage_1(chunks_text):
-  
-  print(f'Start time: {datetime.now()}')
 
   # Prompt to get title and summary for each chunk
-  map_prompt_template = """Firstly, give the below text an informative title. Then, on a new line, write a 75-100 word summary of the following text:
-
+  map_prompt_template = """Firstly, give the below text an informative title.
+  Then, on a new line, write a 75-100 word summary of the following text, using as much original fact and wording as possible.
+  Use direct language.
+  Don't use any of sentence starters or transitional phrases such as:
+  The text outlines, It emphasizes, The text advises, It suggests, The text concludes, The text emphasizes, The text provides, The text discusses...
   Return your answer in the following format:
+
   Title:
   Summary:
 
@@ -155,13 +163,11 @@ def summarize_stage_1(chunks_text):
   map_llm_chain_results = map_llm_chain.batch(map_llm_chain_input)
 
   print('========map_llm_chain_results=========')
-  print(map_llm_chain_results)
+  print_ai_messages(map_llm_chain_results)
   if not isinstance(map_llm_chain_results, list):
     stage_1_outputs = parse_title_summary_results([map_llm_chain_results.content])
   else:
-    stage_1_outputs = parse_title_summary_results([e for e in map_llm_chain_results])
-
-  print(f'Stage 1 done time {datetime.now()}')
+    stage_1_outputs = parse_title_summary_results([e.content for e in map_llm_chain_results])
 
   return {
     'stage_1_outputs': stage_1_outputs
@@ -237,22 +243,19 @@ def get_topics(title_similarity, num_topics = 8, bonus_constant = 0.25, min_size
 
 
 def summarize_stage_2(stage_1_outputs, topics, summary_num_words = 250):
-  print(f'Stage 2 start time {datetime.now()}')
-  print(stage_1_outputs)
-  
+
   # Prompt that passes in all the titles of a topic, and asks for an overall title of the topic
-  title_prompt_template = """Write an informative title that summarizes each of the following groups of titles. Make sure that the titles capture as much information as possible, 
-  and are different from each other:
+  title_prompt_template = """Write an informative title that summarizes each of the following groups of titles.
+  Make sure that the titles capture as much information as possible, and are different from each other.
+  Use direct language, don't use any of sentence starters or transitional phrases such as: The text outlines, It emphasizes, The text advises, It suggests, The text concludes, The text emphasizes...
+  Return your answer in a list, with new line separating each title:
+
   {text}
-  
-  Return your answer in a list, with new line separating each title: 
-  Title 1
-  Title 2
-  Title 3
   """
 
-  map_prompt_template = """Wite a 75-100 word summary of the following text:
-    {text}
+  map_prompt_template = """Wite a 75-100 word summary of the following text, using as much original fact and wording as possible. Return your answer in a form of bullet points, with new line separating each:
+
+  {text}
   """
 
   combine_prompt_template = 'Write a ' + str(summary_num_words) + """-word summary of the following, removing irrelevant information. Finish your answer:
@@ -283,7 +286,6 @@ def summarize_stage_2(stage_1_outputs, topics, summary_num_words = 250):
     topics_titles_concat_all += f'''{i+1}. {c}
     '''
   
-
   title_llm = ChatOpenAI(temperature=0, model_name = MODEL_NAME, max_tokens=None, timeout=None, max_retries=2)
   title_llm_chain = title_prompt | title_llm
   
@@ -291,14 +293,27 @@ def summarize_stage_2(stage_1_outputs, topics, summary_num_words = 250):
   title_llm_chain_results = title_llm_chain.batch(title_llm_chain_input)
 
   # Split by new line
-  titles = title_llm_chain_results.content.split('\n')
+  # Check if the input is a list of AIMessage objects
+  if isinstance(title_llm_chain_results, list):
+      # Extract the content from each AIMessage object in the list
+      contents = [msg.content for msg in title_llm_chain_results]
+      # Join all contents into one string with newline separators (if they were separate messages)
+      all_content = '\n'.join(contents)
+  else:
+      # If it's not a list, assume it's a single AIMessage object and get the content directly
+      all_content = title_llm_chain_results.content
+
+  # Now split the combined content by newlines
+  titles = all_content.split('\n')
+
   # Remove any empty titles
   titles = [t for t in titles if t != '']
   # Remove spaces at start or end of each title
   titles = [t.strip() for t in titles]
 
   print('========summarize_stage_2 titles=========')
-  print(titles)
+  for title in titles:
+    print(title)
 
   map_llm = ChatOpenAI(temperature=0, model_name = MODEL_NAME, max_tokens=None, timeout=None, max_retries=2)
   reduce_llm = ChatOpenAI(temperature=0, model_name = MODEL_NAME, max_tokens=None, timeout=None, max_retries=2)
@@ -312,7 +327,8 @@ def summarize_stage_2(stage_1_outputs, topics, summary_num_words = 250):
   summaries = output['intermediate_steps']
 
   print('========summarize_stage_2 summaries=========')
-  print(summaries)
+  for title in summaries:
+    print(title)
 
   stage_2_outputs = [{'title': t, 'summary': s} for t, s in zip(titles, summaries)]
   final_summary = output['output_text']
@@ -322,6 +338,5 @@ def summarize_stage_2(stage_1_outputs, topics, summary_num_words = 250):
     'stage_2_outputs': stage_2_outputs,
     'final_summary': final_summary
   }
-  print(f'Stage 2 done time {datetime.now()}')
   
   return out

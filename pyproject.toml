@@ -33,6 +33,7 @@ scipy = "^1.14.0"
 langchain = "^0.2.0"
 networkx = "^3.3"
 langchain-openai = "^0.1.13"
+rpunct = {path = "rpunct"}
 
 [tool.poetry.scripts]
 start = "server.main:start"
@@ -46,9 +47,6 @@ httpx = "^0.23.3"
 pytest = "^7.2.1"
 pytest-cov = "^4.0.0"
 pytest-asyncio = "^0.20.3"
-
-[tool.poetry.dependencies]
-en_core_web_sm = {url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1.tar.gz"}
 
 [build-system]
 requires = ["poetry-core"]

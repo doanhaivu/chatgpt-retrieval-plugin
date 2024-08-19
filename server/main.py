@@ -1,4 +1,6 @@
+import sys
 import os
+import re
 from typing import Optional
 import uvicorn
 import spacy
@@ -6,6 +8,8 @@ from fastapi import FastAPI, File, Form, HTTPException, Depends, Body, UploadFil
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
+
+from rpunct import RestorePuncts
 
 from models.api import (
     DeleteRequest,
@@ -30,13 +34,23 @@ BEARER_TOKEN = os.environ.get("BEARER_TOKEN")
 assert BEARER_TOKEN is not None
 
 
+def remove_bracketed_text(input_text):
+    # Use regular expression to find and remove text within square brackets
+    return re.sub(r'\[.*?\]', '', input_text)
+
 def validate_token(credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)):
     if credentials.scheme != "Bearer" or credentials.credentials != BEARER_TOKEN:
         raise HTTPException(status_code=401, detail="Invalid or missing token")
     return credentials
 
+def generate_chunks(texts, chunk_size=20, overlap=0):
+    cleaned_texts = [remove_bracketed_text(text) for text in texts]
+    for i in range(0, len(cleaned_texts), chunk_size - overlap):
+        yield ' '.join(cleaned_texts[i:i + chunk_size])
+
 # Use spaCy to segment the full text into sentences
-nlp = spacy.load('en_core_web_sm')
+nlp = spacy.load('en_core_web_trf')
+rpunct = RestorePuncts()
 
 app = FastAPI(dependencies=[Depends(validate_token)])
 app.mount("/.well-known", StaticFiles(directory=".well-known"), name="static")
@@ -153,19 +167,39 @@ async def delete(
         logger.error(e)
         raise HTTPException(status_code=500, detail="Internal Service Error")
 
+
 @app.post("/summarize/", response_model=SummarizeOutput)
 async def summarize(input_data: SummarizeInput):
     
-    full_text = ' '.join(segment.text for segment in input_data.transcript)
+    #full_text = ' '.join(segment.text for segment in input_data.transcript)
+    #doc = nlp(full_text)
+    #inputsentences = [sent.text for sent in doc.sents]
+    #transcript_chunks = list(generate_chunks([segment.text for segment in input_data.transcript]))
+    
+    # Step 1: Generate the transcript chunks
+    transcript_chunks = list(generate_chunks([segment.text for segment in input_data.transcript]))
 
-    doc = nlp(full_text)
-    inputsentences = [sent.text for sent in doc.sents]
+    print('============transcript_chunks==============')
+    for chunk in transcript_chunks:
+        print("-----------")
+        print(chunk)
 
-    segments = [sentence.split(',') for sentence in inputsentences]
-    segments = [item.strip() for sublist in segments for item in sublist]
+    # Step 2: Punctuate each chunk
+    punctuated_chunks = [rpunct.punctuate(chunk) for chunk in transcript_chunks]
+
+    #docs = list(nlp.pipe(transcript_chunks))
+    docs = list(nlp.pipe(punctuated_chunks))
+    full_doc = spacy.tokens.Doc.from_docs(docs)
+
+    segments = []
+    for sentence in full_doc.sents:  # `sents` provides sentences from the `Doc`
+        segments.extend([item.strip() for item in sentence.text.split(',')])
+
 
     print('============segments==============')
-    print(segments)
+    for line in segments:
+        print("-----------")
+        print(line)
 
     sentences = create_sentences(segments, MIN_WORDS=20, MAX_WORDS=80)
     #sentences = create_sentences(segments, MIN_WORDS=10, MAX_WORDS=50)
@@ -179,9 +213,9 @@ async def summarize(input_data: SummarizeInput):
     stage_1_titles = [e['title'] for e in stage_1_outputs]
     num_1_chunks = len(stage_1_summaries)
 
-    print('============stage_1_summaries and stage_1_titles==============')
-    print(stage_1_summaries)
-    print(stage_1_titles)
+    #print('============stage_1_summaries and stage_1_titles==============')
+    #print(stage_1_summaries)
+    #print(stage_1_titles)
 
     # Use OpenAI to embed the summaries and titles. Size of _embeds: (num_chunks x 1536)
     openai_embed = OpenAIEmbeddings()
