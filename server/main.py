@@ -4,12 +4,14 @@ import re
 from typing import Optional
 import uvicorn
 import spacy
+import numpy as np
+from loguru import logger
+from rpunct import RestorePuncts
 from fastapi import FastAPI, File, Form, HTTPException, Depends, Body, UploadFile
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
-from loguru import logger
-
-from rpunct import RestorePuncts
+from scipy.spatial.distance import cosine, pdist, squareform
+from langchain_openai import OpenAIEmbeddings
 
 from models.api import (
     DeleteRequest,
@@ -23,9 +25,6 @@ from datastore.factory import get_datastore
 from services.file import get_document_from_file
 
 from models.models import DocumentMetadata, Source
-import numpy as np
-from scipy.spatial.distance import cosine
-from langchain_openai import OpenAIEmbeddings
 from services.summarization import SummarizeOutput, SummarizeInput, TranscriptElement
 from services.summarization import create_sentences, create_chunks, summarize_stage_1, get_topics, summarize_stage_2
 
@@ -33,6 +32,22 @@ bearer_scheme = HTTPBearer()
 BEARER_TOKEN = os.environ.get("BEARER_TOKEN")
 assert BEARER_TOKEN is not None
 
+def compute_similarity_matrix2(embeddings):
+    """Compute the cosine similarity matrix for a list of embeddings."""
+    num_chunks = embeddings.shape[0]
+    similarity_matrix = np.zeros((num_chunks, num_chunks))
+    for row in range(num_chunks):
+        for col in range(row, num_chunks):
+            similarity = 1 - cosine(embeddings[row], embeddings[col])
+            similarity_matrix[row, col] = similarity
+            similarity_matrix[col, row] = similarity
+    return similarity_matrix
+
+def compute_similarity_matrix(embeddings):
+    """Compute the cosine similarity matrix for a list of embeddings."""
+    # Compute the pairwise cosine distances and convert them to similarity
+    similarity_matrix = 1 - squareform(pdist(embeddings, metric='cosine'))
+    return similarity_matrix
 
 def remove_bracketed_text(input_text):
     # Use regular expression to find and remove text within square brackets
@@ -43,10 +58,6 @@ def validate_token(credentials: HTTPAuthorizationCredentials = Depends(bearer_sc
         raise HTTPException(status_code=401, detail="Invalid or missing token")
     return credentials
 
-def generate_chunks(texts, chunk_size=20, overlap=0):
-    for i in range(0, len(texts), chunk_size - overlap):
-        yield ' '.join(texts[i:i + chunk_size])
-
 def process_transcript(input_data):
     # Step 1: Clean the full transcript
     full_text = ' '.join(segment.text for segment in input_data.transcript)
@@ -55,10 +66,7 @@ def process_transcript(input_data):
     # Step 2: Punctuate the cleaned full text
     punctuated_text = rpunct.punctuate(cleaned_text)
     
-    # Step 3: Chunk the punctuated text
-    punctuated_chunks = list(generate_chunks(punctuated_text.split(), chunk_size=20))
-    
-    return punctuated_chunks
+    return punctuated_text
 
 # Use spaCy to segment the full text into sentences
 nlp = spacy.load('en_core_web_trf')
@@ -182,40 +190,39 @@ async def delete(
 
 @app.post("/summarize/", response_model=SummarizeOutput)
 async def summarize(input_data: SummarizeInput):    
-    #doc = nlp(full_text)
     punctuated_chunks = process_transcript(input_data)
-    print('============Punctuated Transcript Chunks==============')
-    for chunk in punctuated_chunks:
-        print("-----------")
-        print(chunk)
-        
-    docs = list(nlp.pipe(punctuated_chunks))
-    full_doc = spacy.tokens.Doc.from_docs(docs)
+    doc = nlp(punctuated_chunks)
 
-    segments = []
-    for sentence in full_doc.sents:  # `sents` provides sentences from the `Doc`
-        segments.extend([item.strip() for item in sentence.text.split(',')])
+    #docs = list(nlp.pipe(punctuated_chunks))
+    #full_doc = spacy.tokens.Doc.from_docs(docs)
+    #segments = []
+    #for sentence in full_doc.sents:  # `sents` provides sentences from the `Doc`
+    #    segments.extend([item.strip() for item in sentence.text.split(',')])
+    #sentences = create_sentences(segments, MIN_WORDS=20, MAX_WORDS=80)
 
-    print('============segments==============')
-    for line in segments:
-        print("-----------")
-        print(line)
-
-    sentences = create_sentences(segments, MIN_WORDS=20, MAX_WORDS=80)
-    #sentences = create_sentences(segments, MIN_WORDS=10, MAX_WORDS=50)
+    sentences = []
+    for sentence_num, sentence in enumerate(doc.sents):
+        sentence_text = sentence.text.strip()
+        sentence_length = len(sentence_text.split())
+        sentences.append({
+            'sentence_num': sentence_num,
+            'text': sentence_text,
+            'sentence_length': sentence_length
+        })
     chunks = create_chunks(sentences, CHUNK_LENGTH=5, STRIDE=1)
     chunks_text = [chunk['text'] for chunk in chunks]
+
+    print('============chunks_text==============')
+    for line in chunks_text:
+        print("-----------")
+        print(line)
 
     # Run Stage 1 Summarizing
     stage_1_outputs = summarize_stage_1(chunks_text)['stage_1_outputs']
     # Split the titles and summaries
-    stage_1_summaries = [e['summary'] for e in stage_1_outputs]
-    stage_1_titles = [e['title'] for e in stage_1_outputs]
+    stage_1_summaries = [e['Rewrite'] for e in stage_1_outputs]
+    stage_1_titles = [e['Title'] for e in stage_1_outputs]
     num_1_chunks = len(stage_1_summaries)
-
-    #print('============stage_1_summaries and stage_1_titles==============')
-    #print(stage_1_summaries)
-    #print(stage_1_titles)
 
     # Use OpenAI to embed the summaries and titles. Size of _embeds: (num_chunks x 1536)
     openai_embed = OpenAIEmbeddings()
@@ -223,27 +230,19 @@ async def summarize(input_data: SummarizeInput):
     summary_embeds = np.array(openai_embed.embed_documents(stage_1_summaries))
     title_embeds = np.array(openai_embed.embed_documents(stage_1_titles))
 
-    # Get similarity matrix between the embeddings of the chunk summaries
-    summary_similarity_matrix = np.zeros((num_1_chunks, num_1_chunks))
-    summary_similarity_matrix[:] = np.nan
+    summary_similarity_matrix = compute_similarity_matrix(summary_embeds)
+    title_similarity_matrix = compute_similarity_matrix(title_embeds)
 
-    for row in range(num_1_chunks):
-        for col in range(row, num_1_chunks):
-            # Calculate cosine similarity between the two vectors
-            similarity = 1 - cosine(summary_embeds[row], summary_embeds[col])
-            summary_similarity_matrix[row, col] = similarity
-            summary_similarity_matrix[col, row] = similarity
-
-    # Set num_topics to be 1/4 of the number of chunks, or 8, which ever is smaller
-    num_topics = min(int(num_1_chunks / 4), 8)
+    # Set num_topics
+    num_topics = min(int(num_1_chunks / 4), 20)
     topics_out = get_topics(summary_similarity_matrix, num_topics = num_topics, bonus_constant = 0.2)
     chunk_topics = topics_out['chunk_topics']
     topics = topics_out['topics']
 
     out = summarize_stage_2(stage_1_outputs, topics, summary_num_words = 250)
     stage_2_outputs = out['stage_2_outputs']
-    stage_2_titles = [e['title'] for e in stage_2_outputs]
-    stage_2_summaries = [e['summary'] for e in stage_2_outputs]
+    stage_2_titles = [e['Title'] for e in stage_2_outputs]
+    stage_2_summaries = [e['Rewrite'] for e in stage_2_outputs]
     final_summary = out['final_summary']
     return SummarizeOutput(stage_2_outputs=stage_2_outputs, final_summary=final_summary)
 

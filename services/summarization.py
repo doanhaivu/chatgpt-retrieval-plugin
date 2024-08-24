@@ -13,12 +13,13 @@ from langchain.prompts import PromptTemplate
 from langchain.docstore.document import Document
 from langchain.chains.summarize import load_summarize_chain
 from langchain_core.messages.ai import AIMessage
+
 class TopicData(BaseModel):
     page_content: str
 
 class Stage1Output(BaseModel):
     title: str
-    summary: str
+    rewrite: str
 
 class TranscriptElement(BaseModel):
     text: str
@@ -30,13 +31,14 @@ class SummarizeInput(BaseModel):
 
 class SummaryOutput(BaseModel):
     title: str
-    summary: str
+    rewrite: str
 
 class SummarizeOutput(BaseModel):
     stage_2_outputs: List[SummaryOutput]
     final_summary: str
 
 MODEL_NAME = 'gpt-4'
+
 def create_sentences(segments, MIN_WORDS, MAX_WORDS):
 
   # Combine the non-sentences together
@@ -73,23 +75,30 @@ def create_sentences(segments, MIN_WORDS, MAX_WORDS):
   return sentences
 
 def create_chunks(sentences, CHUNK_LENGTH, STRIDE):
+    chunks = []
+    num_sentences = len(sentences)
 
-  sentences_df = pd.DataFrame(sentences)
-  
-  chunks = []
-  for i in range(0, len(sentences_df), (CHUNK_LENGTH - STRIDE)):
-    chunk = sentences_df.iloc[i:i+CHUNK_LENGTH]
-    chunk_text = ' '.join(chunk['text'].tolist())
-    
-    chunks.append({
-      'start_sentence_num': chunk['sentence_num'].iloc[0],
-      'end_sentence_num': chunk['sentence_num'].iloc[-1],
-      'text': chunk_text,
-      'num_words': len(chunk_text.split(' '))
-    })
-    
-  chunks_df = pd.DataFrame(chunks)
-  return chunks_df.to_dict('records')
+    for i in range(0, num_sentences, CHUNK_LENGTH - STRIDE):
+        chunk_text = []
+        num_words = 0
+
+        # Build the chunk and count words simultaneously
+        for sentence in sentences[i:i+CHUNK_LENGTH]:
+            chunk_text.append(sentence['text'])
+            num_words += sentence['sentence_length']
+
+        # Combine the text of the sentences into one string
+        combined_text = ' '.join(chunk_text)
+        
+        # Create a chunk dictionary
+        chunks.append({
+            'start_sentence_num': sentences[i]['sentence_num'],
+            'end_sentence_num': sentences[min(i + CHUNK_LENGTH - 1, num_sentences - 1)]['sentence_num'],
+            'text': combined_text,
+            'num_words': num_words
+        })
+
+    return chunks
 
 def parse_title_summary_results(results):
     out = []
@@ -100,54 +109,45 @@ def parse_title_summary_results(results):
         title = ''
         summary = ''
         
-        if 'Title:' in e and 'Summary:' in e:
-            title_part = e.split('Summary:')[0]
-            summary_part = e.split('Summary:')[1]
+        if 'Title:' in e and 'Rewrite:' in e:
+            title_part = e.split('Rewrite:')[0]
+            summary_part = e.split('Rewrite:')[1]
             
             if 'Title:' in title_part:
                 title = title_part.split('Title:')[1].strip()
             
             summary = summary_part.strip()
-        else:
-            # Original logic for splitting by |, :, or -
-            if '|' in e:
-                title, summary = e.split('|', 1)
-            #elif ':' in e:
-            #    title, summary = e.split(':', 1)
-            #elif '-' in e:
-            #    title, summary = e.split('-', 1)
-            else:
-                summary = e
-
-            title = title.strip()
-            summary = summary.strip()
 
         processed = {
-            'title': title,
-            'summary': summary
+            'Title': title,
+            'Rewrite': summary
         }
         out.append(processed)
     return out
 
 def print_ai_messages(messages: List[AIMessage]):
     for i, message in enumerate(messages, start=1):
-        print(f"{i} {message.content.split('Summary:')[0].strip()}")
-        print(f"\n{message.content.split('Summary:')[1].strip()}")
+        print(f"{i} {message.content.split('Rewrite:')[0].strip()}")
+        print(f"\n{message.content.split('Rewrite:')[1].strip()}")
         print("-" * 50)
         print()
 
 def summarize_stage_1(chunks_text):
 
   # Prompt to get title and summary for each chunk
-  map_prompt_template = """Firstly, give the below text an informative title.
-  Then, on a new line, write a 75-100 word summary of the following text, using as much original fact and wording as possible.
+  map_prompt_template = """
+  Firstly, give the below text an informative title.
+  Then, on a new line, rewrite the text by converting it from spoken language to written language,
+  keep it concise while retaining the original wording, facts, and examples as much as possible
   Use direct language.
-  Don't use any of sentence starters or transitional phrases such as:
-  The text outlines, It emphasizes, The text advises, It suggests, The text concludes, The text emphasizes, The text provides, The text discusses...
+  You must follow the rules:
+    - The rewrite should be as detailed as needed to make the summary comprehensive.
+    - Rewrite should not mention the author or speaker at all should act as an independent writing.
+    - Do not use any of sentence starters or transitional phrases such as: The text outlines, It emphasizes, The text advises, It suggests, The text concludes, The text emphasizes, The text provides, The text discusses...
   Return your answer in the following format:
 
   Title:
-  Summary:
+  Rewrite:
 
   {text}
   """
@@ -247,17 +247,32 @@ def summarize_stage_2(stage_1_outputs, topics, summary_num_words = 250):
   # Prompt that passes in all the titles of a topic, and asks for an overall title of the topic
   title_prompt_template = """Write an informative title that summarizes each of the following groups of titles.
   Make sure that the titles capture as much information as possible, and are different from each other.
-  Use direct language, don't use any of sentence starters or transitional phrases such as: The text outlines, It emphasizes, The text advises, It suggests, The text concludes, The text emphasizes...
+  Use direct language.
+  You must follow the rules:
+    - Do not mention the author or speaker at all should act as an independent writing.
+    - Do not use any of sentence starters or transitional phrases such as: The text outlines, It emphasizes, The text advises, It suggests, The text concludes, The text emphasizes, The text provides, The text discusses...
   Return your answer in a list, with new line separating each title:
 
   {text}
   """
 
-  map_prompt_template = """Wite a 75-100 word summary of the following text, using as much original fact and wording as possible. Return your answer in a form of bullet points, with new line separating each:
+  #map_prompt_template = """Rewrite the following text by converting it from spoken language to written language.
+  #You must follow the rules:
+  #  - The rewrite should be as detailed as needed to make the summary comprehensive.
+  #  - Rewrite should not mention the author or speaker at all should act as an independent writing.
+  #  - Don't use any of sentence starters or transitional phrases such as: The text outlines, It emphasizes, The text advises, It suggests, The text concludes, The text emphasizes, The text provides, The text discusses...
+  #Return your answer in a form of bullet points, with new line separating each:
+  #
+  #  {text}
+  #  """
+  map_prompt_template = """Wite a 75-100 word summary of the following text:
+    {text}
 
-  {text}
-  """
+    CONCISE SUMMARY:"""
 
+  #combine_prompt_template =  """Write a rewrite of the following, removing irrelevant information. Finish your answer:
+  #{text}
+  #""" + str(summary_num_words) + """-WORD SUMMARY:"""
   combine_prompt_template = 'Write a ' + str(summary_num_words) + """-word summary of the following, removing irrelevant information. Finish your answer:
   {text}
   """ + str(summary_num_words) + """-WORD SUMMARY:"""
@@ -269,15 +284,15 @@ def summarize_stage_2(stage_1_outputs, topics, summary_num_words = 250):
   topics_data = []
   for c in topics:
     topic_data = {
-      'summaries': [stage_1_outputs[chunk_id]['summary'] for chunk_id in c],
-      'titles': [stage_1_outputs[chunk_id]['title'] for chunk_id in c]
+      'rewrites': [stage_1_outputs[chunk_id]['Rewrite'] for chunk_id in c],
+      'titles': [stage_1_outputs[chunk_id]['Title'] for chunk_id in c]
     }
-    topic_data['summaries_concat'] = ' '.join(topic_data['summaries'])
+    topic_data['rewrites_concat'] = ' '.join(topic_data['rewrites'])
     topic_data['titles_concat'] = ', '.join(topic_data['titles'])
     topics_data.append(topic_data)
     
   # Get a list of each community's summaries (concatenated)
-  topics_summary_concat = [c['summaries_concat'] for c in topics_data]
+  topics_summary_concat = [c['rewrites_concat'] for c in topics_data]
   topics_titles_concat = [c['titles_concat'] for c in topics_data]
 
   # Concat into one long string to do the topic title creation
@@ -292,12 +307,8 @@ def summarize_stage_2(stage_1_outputs, topics, summary_num_words = 250):
   title_llm_chain_input = [{'text': topics_titles_concat_all}]
   title_llm_chain_results = title_llm_chain.batch(title_llm_chain_input)
 
-  # Split by new line
-  # Check if the input is a list of AIMessage objects
   if isinstance(title_llm_chain_results, list):
-      # Extract the content from each AIMessage object in the list
       contents = [msg.content for msg in title_llm_chain_results]
-      # Join all contents into one string with newline separators (if they were separate messages)
       all_content = '\n'.join(contents)
   else:
       # If it's not a list, assume it's a single AIMessage object and get the content directly
@@ -330,7 +341,7 @@ def summarize_stage_2(stage_1_outputs, topics, summary_num_words = 250):
   for title in summaries:
     print(title)
 
-  stage_2_outputs = [{'title': t, 'summary': s} for t, s in zip(titles, summaries)]
+  stage_2_outputs = [{'Title': t, 'Rewrite': s} for t, s in zip(titles, summaries)]
   final_summary = output['output_text']
 
   # Return: stage_1_outputs (title and summary), stage_2_outputs (title and summary), final_summary, chunk_allocations
