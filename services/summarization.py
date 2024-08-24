@@ -174,73 +174,77 @@ def summarize_stage_1(chunks_text):
   }
 
 
-def get_topics(title_similarity, num_topics = 8, bonus_constant = 0.25, min_size = 3):
+def get_topics(title_similarity, num_topics=8, bonus_constant=0.25, min_size=3):
+  num_chunks = title_similarity.shape[0]
 
-  proximity_bonus_arr = np.zeros_like(title_similarity)
-  for row in range(proximity_bonus_arr.shape[0]):
-    for col in range(proximity_bonus_arr.shape[1]):
-      if row == col:
-        proximity_bonus_arr[row, col] = 0
-      else:
-        proximity_bonus_arr[row, col] = 1/(abs(row-col)) * bonus_constant
-        
+  # Vectorized calculation of proximity bonuses
+  row_indices, col_indices = np.indices((num_chunks, num_chunks))
+  proximity_bonus_arr = np.where(row_indices != col_indices, bonus_constant / np.abs(row_indices - col_indices), 0)
+  
+  # Adding proximity bonus to title similarity matrix
   title_similarity += proximity_bonus_arr
 
+  # Create the network graph from the similarity matrix
   title_nx_graph = nx.from_numpy_array(title_similarity)
 
+  # Initializing variables for community detection
   desired_num_topics = num_topics
-  # Store the accepted partitionings
   topics_title_accepted = []
 
+  # Finding the initial suitable resolution
   resolution = 0.85
   resolution_step = 0.01
-  iterations = 40
 
-  # Find the resolution that gives the desired number of topics
+  # Initial search for a suitable resolution
   topics_title = []
   while len(topics_title) not in [desired_num_topics, desired_num_topics + 1, desired_num_topics + 2]:
-    topics_title = community.louvain_communities(title_nx_graph, weight = 'weight', resolution = resolution)
+    topics_title = community.louvain_communities(title_nx_graph, weight='weight', resolution=resolution)
     resolution += resolution_step
+
+  # Calculate the standard deviation of topic sizes for the initial partition
   topic_sizes = [len(c) for c in topics_title]
   sizes_sd = np.std(topic_sizes)
-  #modularity = community.modularity(title_nx_graph, topics_title, weight = 'weight', resolution = resolution)
 
+  # Store the best partitioning based on standard deviation
   lowest_sd_iteration = 0
-  # Set lowest sd to inf
   lowest_sd = float('inf')
-
+  
+  # Main loop to find the best partition
+  iterations = 40
   for i in range(iterations):
-    topics_title = community.louvain_communities(title_nx_graph, weight = 'weight', resolution = resolution)
-    #modularity = community.modularity(title_nx_graph, topics_title, weight = 'weight', resolution = resolution)
-    
-    # Check SD
+    topics_title = community.louvain_communities(title_nx_graph, weight='weight', resolution=resolution)
     topic_sizes = [len(c) for c in topics_title]
     sizes_sd = np.std(topic_sizes)
-    
+
+    # Store the current partition
     topics_title_accepted.append(topics_title)
-    
+
+    # Check if the current partition meets the criteria
     if sizes_sd < lowest_sd and min(topic_sizes) >= min_size:
       lowest_sd_iteration = i
       lowest_sd = sizes_sd
-      
-  # Set the chosen partitioning to be the one with highest modularity
+
+    # Increment resolution for the next iteration
+    resolution += resolution_step
+
+  # Use the best partition found
   topics_title = topics_title_accepted[lowest_sd_iteration]
   print(f'Best SD: {lowest_sd}, Best iteration: {lowest_sd_iteration}')
+
+  # Order topics based on their mean indices
+  topic_id_means = [np.mean(c) for c in topics_title]
+  topics_title = [list(c) for _, c in sorted(zip(topic_id_means, topics_title), key=lambda pair: pair[0])]
   
-  topic_id_means = [sum(e)/len(e) for e in topics_title]
-  # Arrange title_topics in order of topic_id_means
-  topics_title = [list(c) for _, c in sorted(zip(topic_id_means, topics_title), key = lambda pair: pair[0])]
-  # Create an array denoting which topic each chunk belongs to
-  chunk_topics = [None] * title_similarity.shape[0]
+  # Assign each chunk to a topic
+  chunk_topics = [None] * num_chunks
   for i, c in enumerate(topics_title):
     for j in c:
       chunk_topics[j] = i
-            
+          
   return {
     'chunk_topics': chunk_topics,
     'topics': topics_title
-    }
-
+  }
 
 def summarize_stage_2(stage_1_outputs, topics, summary_num_words = 250):
 
