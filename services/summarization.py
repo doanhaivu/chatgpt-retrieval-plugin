@@ -162,8 +162,9 @@ def summarize_stage_1(chunks_text):
   # Run the input through the LLM chain (works in parallel)
   map_llm_chain_results = map_llm_chain.batch(map_llm_chain_input)
 
-  print('========map_llm_chain_results=========')
-  print_ai_messages(map_llm_chain_results)
+  #print('========map_llm_chain_results=========')
+  #print_ai_messages(map_llm_chain_results)
+
   if not isinstance(map_llm_chain_results, list):
     stage_1_outputs = parse_title_summary_results([map_llm_chain_results.content])
   else:
@@ -179,7 +180,10 @@ def get_topics(title_similarity, num_topics=8, bonus_constant=0.25, min_size=3):
 
   # Vectorized calculation of proximity bonuses
   row_indices, col_indices = np.indices((num_chunks, num_chunks))
-  proximity_bonus_arr = np.where(row_indices != col_indices, bonus_constant / np.abs(row_indices - col_indices), 0)
+  epsilon = 1e-10  # Small constant to prevent division by zero
+  proximity_bonus_arr = np.where(row_indices != col_indices, 
+                                  bonus_constant / (np.abs(row_indices - col_indices) + epsilon), 
+                                  0)
   
   # Adding proximity bonus to title similarity matrix
   title_similarity += proximity_bonus_arr
@@ -196,10 +200,15 @@ def get_topics(title_similarity, num_topics=8, bonus_constant=0.25, min_size=3):
   resolution_step = 0.01
 
   # Initial search for a suitable resolution
-  topics_title = []
-  while len(topics_title) not in [desired_num_topics, desired_num_topics + 1, desired_num_topics + 2]:
-    topics_title = community.louvain_communities(title_nx_graph, weight='weight', resolution=resolution)
+  topics_title_dict = {}
+  while len(topics_title_dict) not in [desired_num_topics, desired_num_topics + 1, desired_num_topics + 2]:
+    topics_title_dict = community.louvain_communities(title_nx_graph, weight='weight', resolution=resolution)
     resolution += resolution_step
+
+  # Convert topics_title from dict to list of sets
+  topics_title = [set() for _ in range(max(topics_title_dict.values()) + 1)]
+  for node, topic in topics_title_dict.items():
+    topics_title[topic].add(node)
 
   # Calculate the standard deviation of topic sizes for the initial partition
   topic_sizes = [len(c) for c in topics_title]
@@ -212,7 +221,13 @@ def get_topics(title_similarity, num_topics=8, bonus_constant=0.25, min_size=3):
   # Main loop to find the best partition
   iterations = 40
   for i in range(iterations):
-    topics_title = community.louvain_communities(title_nx_graph, weight='weight', resolution=resolution)
+    topics_title_dict = community.louvain_communities(title_nx_graph, weight='weight', resolution=resolution)
+    
+    # Convert topics_title from dict to list of sets
+    topics_title = [set() for _ in range(max(topics_title_dict.values()) + 1)]
+    for node, topic in topics_title_dict.items():
+      topics_title[topic].add(node)
+
     topic_sizes = [len(c) for c in topics_title]
     sizes_sd = np.std(topic_sizes)
 
@@ -232,7 +247,7 @@ def get_topics(title_similarity, num_topics=8, bonus_constant=0.25, min_size=3):
   print(f'Best SD: {lowest_sd}, Best iteration: {lowest_sd_iteration}')
 
   # Order topics based on their mean indices
-  topic_id_means = [np.mean(c) for c in topics_title]
+  topic_id_means = [np.mean(list(c)) for c in topics_title]  # Convert set to list for mean calculation
   topics_title = [list(c) for _, c in sorted(zip(topic_id_means, topics_title), key=lambda pair: pair[0])]
   
   # Assign each chunk to a topic
@@ -240,7 +255,7 @@ def get_topics(title_similarity, num_topics=8, bonus_constant=0.25, min_size=3):
   for i, c in enumerate(topics_title):
     for j in c:
       chunk_topics[j] = i
-          
+            
   return {
     'chunk_topics': chunk_topics,
     'topics': topics_title
