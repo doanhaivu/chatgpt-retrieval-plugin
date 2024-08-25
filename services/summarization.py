@@ -30,8 +30,8 @@ class SummarizeInput(BaseModel):
     transcript: List[TranscriptElement]
 
 class SummaryOutput(BaseModel):
-    title: str
-    rewrite: str
+    Title: str
+    Rewrite: str
 
 class SummarizeOutput(BaseModel):
     stage_2_outputs: List[SummaryOutput]
@@ -138,11 +138,11 @@ def summarize_stage_1(chunks_text):
   map_prompt_template = """
   Firstly, give the below text an informative title.
   Then, on a new line, rewrite the text by converting it from spoken language to written language,
-  keep it concise while retaining the original wording, facts, and examples as much as possible
+  Keep it concise while retaining the original wording, facts, and examples as much as possible
   Use direct language.
   You must follow the rules:
     - The rewrite should be as detailed as needed to make the summary comprehensive.
-    - Rewrite should not mention the author or speaker at all should act as an independent writing.
+    - Do not mention the author or speaker at all should act as an independent writing.
     - Do not use any of sentence starters or transitional phrases such as: The text outlines, It emphasizes, The text advises, It suggests, The text concludes, The text emphasizes, The text provides, The text discusses...
   Return your answer in the following format:
 
@@ -196,46 +196,38 @@ def get_topics(title_similarity, num_topics=8, bonus_constant=0.25, min_size=3):
   topics_title_accepted = []
 
   # Finding the initial suitable resolution
-  resolution = 0.85
-  resolution_step = 0.01
+  resolution = 0.80
+  resolution_step = 0.005
 
   # Initial search for a suitable resolution
-  topics_title_dict = {}
-  while len(topics_title_dict) not in [desired_num_topics, desired_num_topics + 1, desired_num_topics + 2]:
-    topics_title_dict = community.louvain_communities(title_nx_graph, weight='weight', resolution=resolution)
+  topics_title = []
+  while len(topics_title) not in [desired_num_topics, desired_num_topics + 1, desired_num_topics + 2]:
+    topics_title = community.louvain_communities(title_nx_graph, weight='weight', resolution=resolution)
+    print(f"topics_title (initial loop): {type(topics_title)}, length: {len(topics_title)}")  # Debug statement
     resolution += resolution_step
 
-  # Convert topics_title from dict to list of sets
-  topics_title = [set() for _ in range(max(topics_title_dict.values()) + 1)]
-  for node, topic in topics_title_dict.items():
-    topics_title[topic].add(node)
-
   # Calculate the standard deviation of topic sizes for the initial partition
-  topic_sizes = [len(c) for c in topics_title]
-  sizes_sd = np.std(topic_sizes)
+  topic_sizes = [len(c) for c in topics_title if len(c) >= min_size]  # Exclude small communities
+  sizes_sd = np.std(topic_sizes) if topic_sizes else float('inf')
 
   # Store the best partitioning based on standard deviation
   lowest_sd_iteration = 0
-  lowest_sd = float('inf')
+  lowest_sd = sizes_sd
   
   # Main loop to find the best partition
   iterations = 40
   for i in range(iterations):
-    topics_title_dict = community.louvain_communities(title_nx_graph, weight='weight', resolution=resolution)
-    
-    # Convert topics_title from dict to list of sets
-    topics_title = [set() for _ in range(max(topics_title_dict.values()) + 1)]
-    for node, topic in topics_title_dict.items():
-      topics_title[topic].add(node)
+    topics_title = community.louvain_communities(title_nx_graph, weight='weight', resolution=resolution)
+    print(f"topics_title (main loop): {type(topics_title)}, length: {len(topics_title)}")  # Debug statement
 
-    topic_sizes = [len(c) for c in topics_title]
-    sizes_sd = np.std(topic_sizes)
+    topic_sizes = [len(c) for c in topics_title if len(c) >= min_size]  # Exclude small communities
+    sizes_sd = np.std(topic_sizes) if topic_sizes else float('inf')
 
     # Store the current partition
     topics_title_accepted.append(topics_title)
 
     # Check if the current partition meets the criteria
-    if sizes_sd < lowest_sd and min(topic_sizes) >= min_size:
+    if sizes_sd < lowest_sd:
       lowest_sd_iteration = i
       lowest_sd = sizes_sd
 
@@ -264,7 +256,8 @@ def get_topics(title_similarity, num_topics=8, bonus_constant=0.25, min_size=3):
 def summarize_stage_2(stage_1_outputs, topics, summary_num_words = 250):
 
   # Prompt that passes in all the titles of a topic, and asks for an overall title of the topic
-  title_prompt_template = """Write an informative title that summarizes each of the following groups of titles.
+  title_prompt_template = """
+  Write an informative title that summarizes each of the following groups of titles.
   Make sure that the titles capture as much information as possible, and are different from each other.
   Use direct language.
   You must follow the rules:
@@ -275,26 +268,28 @@ def summarize_stage_2(stage_1_outputs, topics, summary_num_words = 250):
   {text}
   """
 
-  #map_prompt_template = """Rewrite the following text by converting it from spoken language to written language.
-  #You must follow the rules:
-  #  - The rewrite should be as detailed as needed to make the summary comprehensive.
-  #  - Rewrite should not mention the author or speaker at all should act as an independent writing.
-  #  - Don't use any of sentence starters or transitional phrases such as: The text outlines, It emphasizes, The text advises, It suggests, The text concludes, The text emphasizes, The text provides, The text discusses...
-  #Return your answer in a form of bullet points, with new line separating each:
-  #
-  #  {text}
-  #  """
-  map_prompt_template = """Wite a 75-100 word summary of the following text:
-    {text}
+  map_prompt_template = """
+  Write a 75-100 word summary of the following text.
+  Keep it concise while retaining the original wording, facts, and examples as much as possible.
+  Use direct language.
+  You must follow the following rules:
+    - The summary should be as detailed as needed to make the summary comprehensive.
+    - Do not mention the author or speaker at all should act as an independent writing.
+    - Do not use any of sentence starters or transitional phrases such as: The text outlines, It emphasizes, The text advises, It suggests, The text concludes, The text emphasizes, The text provides, The text discusses...
 
-    CONCISE SUMMARY:"""
-
-  #combine_prompt_template =  """Write a rewrite of the following, removing irrelevant information. Finish your answer:
-  #{text}
-  #""" + str(summary_num_words) + """-WORD SUMMARY:"""
-  combine_prompt_template = 'Write a ' + str(summary_num_words) + """-word summary of the following, removing irrelevant information. Finish your answer:
   {text}
-  """ + str(summary_num_words) + """-WORD SUMMARY:"""
+  """
+
+  combine_prompt_template = 'Write a ' + str(summary_num_words) + """-word summary of the following, removing irrelevant information.
+  Keep it concise while retaining the original wording, facts, and examples as much as possible.
+  Use direct language.
+  You must follow the following rules:
+    - The summary should be as detailed as needed to make the summary comprehensive.
+    - Do not mention the author or speaker at all should act as an independent writing.
+    - Do not use any of sentence starters or transitional phrases such as: The text outlines, It emphasizes, The text advises, It suggests, The text concludes, The text emphasizes, The text provides, The text discusses...
+  
+  {text}
+  """
 
   title_prompt = PromptTemplate(template=title_prompt_template, input_variables=["text"])
   map_prompt = PromptTemplate(template=map_prompt_template, input_variables=["text"])
@@ -357,8 +352,8 @@ def summarize_stage_2(stage_1_outputs, topics, summary_num_words = 250):
   summaries = output['intermediate_steps']
 
   print('========summarize_stage_2 summaries=========')
-  for title in summaries:
-    print(title)
+  for aSummary in summaries:
+    print(aSummary)
 
   stage_2_outputs = [{'Title': t, 'Rewrite': s} for t, s in zip(titles, summaries)]
   final_summary = output['output_text']
