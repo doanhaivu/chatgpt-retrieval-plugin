@@ -34,8 +34,8 @@ class SummaryOutput(BaseModel):
     Rewrite: str
 
 class SummarizeOutput(BaseModel):
-    stage_2_outputs: List[SummaryOutput]
-    final_summary: str
+    topic_summary_items: List[SummaryOutput]
+    video_summary: str
 
 MODEL_NAME = 'gpt-4'
 
@@ -162,9 +162,6 @@ def summarize_stage_1(chunks_text):
   # Run the input through the LLM chain (works in parallel)
   map_llm_chain_results = map_llm_chain.batch(map_llm_chain_input)
 
-  #print('========map_llm_chain_results=========')
-  #print_ai_messages(map_llm_chain_results)
-
   if not isinstance(map_llm_chain_results, list):
     stage_1_outputs = parse_title_summary_results([map_llm_chain_results.content])
   else:
@@ -203,7 +200,6 @@ def get_topics(title_similarity, num_topics=8, bonus_constant=0.25, min_size=3):
   topics_title = []
   while len(topics_title) not in [desired_num_topics, desired_num_topics + 1, desired_num_topics + 2]:
     topics_title = community.louvain_communities(title_nx_graph, weight='weight', resolution=resolution)
-    print(f"topics_title (initial loop): {type(topics_title)}, length: {len(topics_title)}")  # Debug statement
     resolution += resolution_step
 
   # Calculate the standard deviation of topic sizes for the initial partition
@@ -218,7 +214,6 @@ def get_topics(title_similarity, num_topics=8, bonus_constant=0.25, min_size=3):
   iterations = 40
   for i in range(iterations):
     topics_title = community.louvain_communities(title_nx_graph, weight='weight', resolution=resolution)
-    print(f"topics_title (main loop): {type(topics_title)}, length: {len(topics_title)}")  # Debug statement
 
     topic_sizes = [len(c) for c in topics_title if len(c) >= min_size]  # Exclude small communities
     sizes_sd = np.std(topic_sizes) if topic_sizes else float('inf')
@@ -358,10 +353,9 @@ def summarize_stage_2(stage_1_outputs, topics, summary_num_words = 250):
   stage_2_outputs = [{'Title': t, 'Rewrite': s} for t, s in zip(titles, summaries)]
   final_summary = output['output_text']
 
-  # Return: stage_1_outputs (title and summary), stage_2_outputs (title and summary), final_summary, chunk_allocations
   out = {
-    'stage_2_outputs': stage_2_outputs,
-    'final_summary': final_summary
+    'topic_summary_items': stage_2_outputs,
+    'video_summary': final_summary
   }
   
   return out

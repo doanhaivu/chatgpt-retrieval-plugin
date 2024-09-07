@@ -212,11 +212,6 @@ async def summarize(input_data: SummarizeInput):
     chunks = create_chunks(sentences, CHUNK_LENGTH=5, STRIDE=1)
     chunks_text = [chunk['text'] for chunk in chunks]
 
-    print('============chunks_text==============')
-    for line in chunks_text:
-        print("-----------")
-        print(line)
-
     # Run Stage 1 Summarizing
     stage_1_outputs = summarize_stage_1(chunks_text)['stage_1_outputs']
     # Split the titles and summaries
@@ -240,11 +235,11 @@ async def summarize(input_data: SummarizeInput):
     topics = topics_out['topics']
 
     out = summarize_stage_2(stage_1_outputs, topics, summary_num_words = 250)
-    stage_2_outputs = out['stage_2_outputs']
-    stage_2_titles = [e['Title'] for e in stage_2_outputs]
-    stage_2_summaries = [e['Rewrite'] for e in stage_2_outputs]
-    final_summary = out['final_summary']
-    return SummarizeOutput(stage_2_outputs=stage_2_outputs, final_summary=final_summary)
+    topic_summary_items = out['topic_summary_items']
+    stage_2_titles = [e['Title'] for e in topic_summary_items]
+    stage_2_summaries = [e['Rewrite'] for e in topic_summary_items]
+    video_summary = out['video_summary']
+    return SummarizeOutput(topic_summary_items=topic_summary_items, video_summary=video_summary)
 
 @app.on_event("startup")
 async def startup():
