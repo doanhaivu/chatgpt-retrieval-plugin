@@ -58,7 +58,50 @@ def validate_token(credentials: HTTPAuthorizationCredentials = Depends(bearer_sc
         raise HTTPException(status_code=401, detail="Invalid or missing token")
     return credentials
 
-def process_transcript(input_data):
+def adjust_sentence_lengths(doc):
+    sentences = []
+    temp_sentence = ""
+    word_count = 0
+
+    for sentence_num, sentence in enumerate(doc.sents):
+        sentence_text = sentence.text.strip()
+        sentence_words = sentence_text.split()
+        sentence_length = len(sentence_words)
+
+        # If the temp sentence plus current sentence exceeds 80 words, add the temp to the list and start fresh
+        if word_count + sentence_length > 80:
+            sentences.append({
+                'sentence_num': len(sentences),
+                'text': temp_sentence.strip(),
+                'sentence_length': word_count
+            })
+            temp_sentence = sentence_text
+            word_count = sentence_length
+        else:
+            temp_sentence += " " + sentence_text
+            word_count += sentence_length
+
+        # If temp sentence is between 20 and 80 words, add it to the list
+        if 20 <= word_count <= 80:
+            sentences.append({
+                'sentence_num': len(sentences),
+                'text': temp_sentence.strip(),
+                'sentence_length': word_count
+            })
+            temp_sentence = ""
+            word_count = 0
+
+    # Add any remaining sentence that might be smaller than 80 but still valid
+    if word_count > 0:
+        sentences.append({
+            'sentence_num': len(sentences),
+            'text': temp_sentence.strip(),
+            'sentence_length': word_count
+        })
+
+    return sentences
+
+def process_transcript(input_data: SummarizeInput):
     # Step 1: Clean the full transcript
     full_text = ' '.join(segment.text for segment in input_data.transcript)
     cleaned_text = remove_bracketed_text(full_text)
@@ -200,20 +243,14 @@ async def summarize(input_data: SummarizeInput):
     #    segments.extend([item.strip() for item in sentence.text.split(',')])
     #sentences = create_sentences(segments, MIN_WORDS=20, MAX_WORDS=80)
 
-    sentences = []
-    for sentence_num, sentence in enumerate(doc.sents):
-        sentence_text = sentence.text.strip()
-        sentence_length = len(sentence_text.split())
-        sentences.append({
-            'sentence_num': sentence_num,
-            'text': sentence_text,
-            'sentence_length': sentence_length
-        })
+    sentences = adjust_sentence_lengths(doc)
     chunks = create_chunks(sentences, CHUNK_LENGTH=5, STRIDE=1)
     chunks_text = [chunk['text'] for chunk in chunks]
 
     # Run Stage 1 Summarizing
-    stage_1_outputs = summarize_stage_1(chunks_text)['stage_1_outputs']
+    stage_1_outputs = summarize_stage_1(chunks_text)
+    return SummarizeOutput(topic_summary_items=stage_1_outputs, video_summary='video_summary')
+
     # Split the titles and summaries
     stage_1_summaries = [e['Rewrite'] for e in stage_1_outputs]
     stage_1_titles = [e['Title'] for e in stage_1_outputs]

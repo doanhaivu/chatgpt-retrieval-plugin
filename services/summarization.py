@@ -14,13 +14,6 @@ from langchain.docstore.document import Document
 from langchain.chains.summarize import load_summarize_chain
 from langchain_core.messages.ai import AIMessage
 
-class TopicData(BaseModel):
-    page_content: str
-
-class Stage1Output(BaseModel):
-    title: str
-    rewrite: str
-
 class TranscriptElement(BaseModel):
     text: str
     start: float
@@ -32,6 +25,11 @@ class SummarizeInput(BaseModel):
 class SummaryOutput(BaseModel):
     Title: str
     Rewrite: str
+
+class SummaryOutputWithTimestamp(BaseModel):
+    summary: SummaryOutput
+    start: float
+    duration: float
 
 class SummarizeOutput(BaseModel):
     topic_summary_items: List[SummaryOutput]
@@ -167,9 +165,7 @@ def summarize_stage_1(chunks_text):
   else:
     stage_1_outputs = parse_title_summary_results([e.content for e in map_llm_chain_results])
 
-  return {
-    'stage_1_outputs': stage_1_outputs
-  }
+  return stage_1_outputs
 
 
 def get_topics(title_similarity, num_topics=8, bonus_constant=0.25, min_size=3):
