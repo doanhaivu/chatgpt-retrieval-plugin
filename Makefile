@@ -1,6 +1,6 @@
 # Heroku
-# make heroku-login
-# make heroku-push
+# command 1: heroku login
+# command 2: heroku-push
 
 HEROKU_APP = chatvector-retrieval
 
