@@ -3,15 +3,17 @@ FROM python:3.10
 
 WORKDIR /code
 
-# Install Poetry
-RUN pip install poetry
+# Copy the pre-downloaded .whl files into the Docker image
+COPY ./wheels /code/wheels
+
+# Install pip dependencies
+COPY ./requirements.txt /code/
+
+# Install dependencies using the pre-downloaded .whl files
+RUN pip install --no-cache-dir --find-links=/code/wheels -r requirements.txt
 
 # Copy necessary project files
-COPY ./pyproject.toml ./poetry.lock* /code/
 COPY ./rpunct /code/rpunct
-
-# Install all dependencies using Poetry, excluding dev dependencies
-RUN poetry install --only main --no-interaction --no-ansi
 
 # Install rpunct as an editable package
 RUN pip install --no-cache-dir -e /code/rpunct
